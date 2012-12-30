@@ -19,7 +19,8 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
       "function": kw("function"), "catch": kw("catch"),
       "for": kw("for"), "switch": kw("switch"), "case": kw("case"), "default": kw("default"),
       "in": operator, "typeof": operator, "instanceof": operator,
-      "true": atom, "false": atom, "null": atom, "undefined": atom, "NaN": atom, "Infinity": atom
+      "true": atom, "false": atom, "null": atom, "undefined": atom, "NaN": atom, "Infinity": atom,
+	  "${" : kw("substart"), "}": kw("subend")
     };
 
     // Extend the 'normal' keywords with the TypeScript language extensions
@@ -79,8 +80,47 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
 
   function jsTokenBase(stream, state) {
     var ch = stream.next();
-    if (ch == '"' || ch == "'")
+    if (ch == "`" || state.template == "afterparen" ||
+        state.template == "linecontinue") {
+      while (1) {
+        if (state.template == "afterparen" || 
+            state.template == "linecontinue") {
+          state.template = "none";
+          // need to push back any of '$\`'. Note that when 
+          // template == "linecontinue", ch is now the first non-white
+          // space because tokenize() below ate the spaces.
+          // (This will be buggy if the hightlighter uses background color)
+          stream.backUp(1);
+        }
+        var tempCh;
+        while (tempCh = stream.eat(/[^$`\\]/))
+          ch = tempCh;
+        if (!stream.peek()) { // end of line
+          state.template = "linecontinue";
+          break;
+        }
+        if ((ch = stream.next()) == "\\") {
+          stream.next();
+          continue;
+        }
+        if (ch == "`") {
+          state.template = "none";
+          break;
+        }
+        if (stream.peek() == "{") {
+          stream.backUp(1); // '$'
+          state.template = "toeatdollar";
+          break;
+        }
+      }
+      return ret("string", "string");
+    }
+    else if (ch == '"' || ch == "'")
       return chain(stream, state, jsTokenString(ch));
+    else if (state.template == "inparen" && ch == "}") {
+      state.template = "afterparen";
+      return ret("operator", "keyword");
+    }
     else if (/[\[\]{}\(\),;\:\.]/.test(ch))
       return ret(ch);
     else if (ch == "0" && stream.eat(/x/i)) {
@@ -117,6 +157,12 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
     else if (isOperatorChar.test(ch)) {
       stream.eatWhile(isOperatorChar);
       return ret("operator", null, stream.current());
+    }
+    else if (state.template == "toeatdollar"){
+      if (!stream.eat("{"))
+        throw "this should not happen";
+      state.template = "inparen";
+      return ret("operator", "keyword");
     }
     else {
       stream.eatWhile(/[\w\$_]/);
@@ -373,7 +419,8 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
         localVars: parserConfig.localVars,
         globalVars: parserConfig.globalVars,
         context: parserConfig.localVars && {vars: parserConfig.localVars},
-        indented: 0
+        indented: 0,
+        template: "none"
       };
     },
 
